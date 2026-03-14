@@ -5,37 +5,50 @@ node_modules/
 
 # Expo
 .expo/
+.expo-shared/
 dist/
 web-build/
 expo-env.d.ts
 
-# Native
-.kotlin/
-*.orig.*
+# Native build outputs and creds
+android/**/build/
+android/**/.cxx/
+android/app/debug.keystore
+*.apk
+*.aab
+*.keystore
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+ios/**/build/
+ios/Pods/
+*.xcarchive
+
+# Platform services
+google-services.json
+GoogleService-Info.plist
 
 # Metro
 .metro-health-check*
 
-# debug
+# debug/logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
 
 # macOS
 .DS_Store
 *.pem
 
 # local env files
+.env
+.env.*
 .env*.local
 
-# typescript
+# coverage/build artifacts
+coverage/
+dist/
 *.tsbuildinfo
-
-# generated native folders
-/ios
-/android

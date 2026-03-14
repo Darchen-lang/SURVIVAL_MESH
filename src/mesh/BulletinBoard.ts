@@ -27,6 +27,11 @@ export class BulletinBoard {
     return post;
   }
 
+    async deletePost(id: string): Promise<void> {
+      const conn = await db.getConnection();
+      await conn.runAsync(`DELETE FROM posts WHERE id = ?`, [id]);
+    }
+
   async upsertPost(post: BulletinPost): Promise<void> {
     const conn = await db.getConnection();
     await conn.runAsync(

@@ -78,6 +78,11 @@ export class MessageQueue {
 		await conn.runAsync(`UPDATE messages SET delivered = 1 WHERE id = ?`, [id]);
 	}
 
+	async delete(id: string): Promise<void> {
+		const conn = await db.getConnection();
+		await conn.runAsync(`DELETE FROM messages WHERE id = ?`, [id]);
+	}
+
 	async getAllMessages(limit = 300): Promise<MeshPacket[]> {
 		const conn = await db.getConnection();
 		const rows = await conn.getAllAsync<Row>(
@@ -98,6 +103,11 @@ export class MessageQueue {
 			timestamp: r.timestamp,
 			type: r.type,
 		}));
+	}
+
+	async clearAll(): Promise<void> {
+		const conn = await db.getConnection();
+		await conn.runAsync(`DELETE FROM messages`);
 	}
 }
 

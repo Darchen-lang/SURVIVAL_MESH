@@ -153,8 +153,7 @@ export default function ChatScreen() {
 
   async function deleteMessage(messageId: string): Promise<void> {
     try {
-      // Delete from message queue
-      await messageQueue.markDelivered(messageId);
+      await messageQueue.delete(messageId);
       await loadMessages();
     } catch (error) {
       console.error('Failed to delete message:', error);
@@ -192,6 +191,16 @@ export default function ChatScreen() {
     });
   }, []);
 
+  // Reload when myNodeId changes to refresh delete buttons
+  useEffect(() => {
+    if (myNodeId) {
+      console.log('✅ MyNodeId loaded:', myNodeId);
+      void loadMessages();
+    } else {
+      console.log('ℹ️ MyNodeId still loading...');
+    }
+  }, [myNodeId]);
+
   useFocusEffect(
     useCallback(() => {
       void loadContacts();
@@ -205,13 +214,18 @@ export default function ChatScreen() {
       return;
     }
 
+    // Ensure we have our node id for sender attribution (needed for delete button visibility)
+    const senderNodeId = myNodeId || (await identityManager.getPublicKeyHash());
+    if (!myNodeId) {
+      setMyNodeId(senderNodeId);
+    }
+
     if (selectedNodeId) {
       const contact = contacts.find((c) => c.nodeId === selectedNodeId);
       if (!contact) {
         return;
       }
 
-      const senderNodeId = await identityManager.getPublicKeyHash();
       const senderPublicKey = await identityManager.getPublicKey();
       const cipher = await identityManager.encryptMessage(contact.publicKey, payload);
       const envelope = {
@@ -223,17 +237,32 @@ export default function ChatScreen() {
 
       await meshRouter.send(`ENC1:${JSON.stringify(envelope)}`, senderNodeId, 'message');
     } else {
-      await meshRouter.send(payload, 'LOCAL01', 'message');
+      // Use our actual node id instead of placeholder so delete button can match
+      await meshRouter.send(payload, senderNodeId, 'message');
     }
 
     setDraft('');
     await loadMessages();
   }
 
+  async function clearAllMessages(): Promise<void> {
+    try {
+      await messageQueue.clearAll();
+      await loadMessages();
+    } catch (e) {
+      console.error('Failed to clear messages', e);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
-        <Text style={styles.title}>MESH CHAT</Text>
+      <View style={styles.header}>
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>MESH CHAT</Text>
+          <Pressable style={styles.clearBtn} onPress={() => void clearAllMessages()}>
+            <Text style={styles.clearText}>Clear chat</Text>
+          </Pressable>
+        </View>
 
         <View style={styles.targetWrap}>
           <Text style={styles.targetLabel}>Send target</Text>
@@ -262,40 +291,58 @@ export default function ChatScreen() {
           </ScrollView>
           {contacts.length === 0 ? <Text style={styles.targetSub}>No saved contacts yet. Use Identity tab to import.</Text> : null}
         </View>
+      </View>
 
-        <FlatList
-          data={visibleMessages}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <MessageRow 
-              item={item} 
-              onDelete={() => void deleteMessage(item.id)}
-              isMyMessage={item.senderId === (identityManager.getPublicKeyHash as any)}
-            />
-          )}
-          ListEmptyComponent={
-            <Text style={styles.sub}>
-              {selectedNodeId ? `No encrypted messages with #${selectedNodeId} yet` : 'No broadcast messages yet'}
-            </Text>
-          }
-        />
-
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder={
-              selectedNodeId
-                ? `Encrypted message to ${contacts.find((c) => c.nodeId === selectedNodeId)?.alias ?? `#${selectedNodeId}`}`
-                : 'Type offline mesh message'
-            }
-            placeholderTextColor="#66758f"
+      <FlatList
+        data={visibleMessages}
+        keyExtractor={(item) => item.id}
+        style={styles.messagesList}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item }) => (
+          <MessageRow 
+            item={item} 
+            onDelete={() => void deleteMessage(item.id)}
+            isMyMessage={item.senderId === myNodeId}
           />
-          <Pressable style={styles.sendBtn} onPress={() => void onSend()}>
-            <Text style={styles.sendText}>SEND</Text>
-          </Pressable>
+        )}
+        ListEmptyComponent={
+          <Text style={styles.sub}>
+            {selectedNodeId ? `No encrypted messages with #${selectedNodeId} yet` : 'No broadcast messages yet'}
+          </Text>
+        }
+      />
+
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.inputWrapper}>
+        <View style={styles.composerCard}>
+          <View style={styles.composerHeader}>
+            <Text style={styles.composerLabel}>Compose message</Text>
+            <Text style={styles.composerTarget}>
+              {selectedNodeId
+                ? `To: ${contacts.find((c) => c.nodeId === selectedNodeId)?.alias ?? `#${selectedNodeId}`}`
+                : 'To: Broadcast (everyone)'}
+            </Text>
+          </View>
+
+          <View style={styles.composerRow}>
+            <TextInput
+              style={styles.input}
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={
+                selectedNodeId
+                  ? `Encrypted message to ${contacts.find((c) => c.nodeId === selectedNodeId)?.alias ?? `#${selectedNodeId}`}`
+                  : 'Type an offline mesh message'
+              }
+              placeholderTextColor="#7a8fa6"
+              multiline
+              numberOfLines={3}
+              textAlignVertical="top"
+              editable
+            />
+            <Pressable style={styles.sendBtn} onPress={() => void onSend()}>
+              <Text style={styles.sendText}>Send</Text>
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -303,7 +350,23 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0c1118' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#0c1118', 
+    flexDirection: 'column',
+  },
+  header: {
+    backgroundColor: '#0c1118',
+    paddingHorizontal: 0,
+    flexDirection: 'column',
+    gap: 6,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+  },
   title: {
     color: '#72f2c0',
     fontSize: 22,
@@ -312,6 +375,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 10,
+  },
+  clearBtn: {
+    marginRight: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#1a2433',
+    borderWidth: 1,
+    borderColor: '#2f4157',
+  },
+  clearText: {
+    color: '#ffb4b4',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  messagesList: {
+    flex: 1,
+    backgroundColor: '#0c1118',
+    paddingHorizontal: 16,
+  },
+  listContent: {
+    paddingBottom: 420,
   },
   targetWrap: {
     marginHorizontal: 16,
@@ -360,7 +445,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 4,
   },
-  listContent: { paddingHorizontal: 16, paddingBottom: 12, flexGrow: 1 },
+  inputWrapper: { 
+    backgroundColor: '#0c1118', 
+    borderTopWidth: 1, 
+    borderColor: '#1f2b3a',
+    paddingBottom: 30,
+    paddingHorizontal: 16,
+    paddingTop: 22,
+    marginBottom: 70,
+  },
   msgCard: {
     backgroundColor: '#141c27',
     borderColor: '#243141',
@@ -413,37 +506,61 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   sub: { color: '#7c879a', textAlign: 'center', marginTop: 24 },
-  inputRow: {
-    flexDirection: 'row',
+  composerCard: {
+    backgroundColor: '#111a28',
+    borderWidth: 1,
+    borderColor: '#223243',
+    borderRadius: 14,
     padding: 12,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderColor: '#1f2b3a',
     gap: 10,
-    backgroundColor: '#0c1118',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  composerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  composerLabel: {
+    color: '#d7e7ff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  composerTarget: {
+    color: '#7fb19f',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  composerRow: {
+    flexDirection: 'row',
+    gap: 10,
   },
   input: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 64,
+    maxHeight: 140,
     borderWidth: 2,
-    borderColor: '#4a5f74',
+    borderColor: '#5a7a99',
     borderRadius: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 10,
-    color: '#f2f6ff',
-    backgroundColor: '#0a1016',
+    color: '#ffffff',
+    backgroundColor: '#151d2a',
     fontSize: 15,
+    fontWeight: '500',
   },
   sendBtn: {
-    backgroundColor: '#244f3f',
-    borderWidth: 2,
-    borderColor: '#5da389',
+    backgroundColor: '#34a27c',
+    borderWidth: 0,
     borderRadius: 10,
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    minHeight: 44,
+    paddingVertical: 12,
+    minHeight: 64,
     justifyContent: 'center',
     alignItems: 'center',
+    alignSelf: 'stretch',
   },
-  sendText: { color: '#d9ffef', fontWeight: '800' },
+  sendText: { color: '#0b1118', fontWeight: '900', fontSize: 14 }
 });

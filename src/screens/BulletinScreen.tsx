@@ -46,6 +46,15 @@ export default function BulletinScreen() {
     await load();
   }
 
+  async function onDelete(postId: string) {
+    try {
+      await bulletinBoard.deletePost(postId);
+      await load();
+    } catch (e) {
+      console.error('Failed to delete post', e);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerRow}>
@@ -75,6 +84,9 @@ export default function BulletinScreen() {
                     <Text style={styles.cardMeta}>#{post.authorKeyHash}</Text>
                     <Text style={styles.cardMeta}>{new Date(post.timestamp).toLocaleString()}</Text>
                   </View>
+                  <Pressable style={styles.deleteBtn} onPress={() => void onDelete(post.id)}>
+                    <Text style={styles.deleteText}>Delete</Text>
+                  </Pressable>
                 </View>
               ))}
             </View>
@@ -193,6 +205,21 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginBottom: 8,
+  },
+  deleteBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-end',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#2c1a1a',
+    borderWidth: 1,
+    borderColor: '#5a2f2f',
+  },
+  deleteText: {
+    color: '#ffb4b4',
+    fontWeight: '700',
+    fontSize: 12,
   },
   cardContent: {
     color: '#f0f3f7',

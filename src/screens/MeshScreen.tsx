@@ -1,3 +1,6 @@
+// At the very top of the useEffect in MeshScreen.tsx
+import { NativeModules } from 'react-native';
+console.log('BleMesh module:', NativeModules.BleMesh);
 import { useEffect, useRef, useState } from 'react';
 import type { Permission } from 'react-native';
 import {
@@ -27,6 +30,7 @@ export default function MeshScreen() {
   const [beaconError, setBeaconError] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<string>('Not scanning');
   const [blePermissionState, setBlePermissionState] = useState<'unknown' | 'granted' | 'denied'>('unknown');
+  const [bluetoothEnabled, setBluetoothEnabled] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
 
   function getRequiredBlePermissions(): Permission[] {
     if (Platform.OS !== 'android') {
@@ -92,9 +96,60 @@ export default function MeshScreen() {
     }
   }
 
+  async function checkBluetoothEnabled(): Promise<boolean> {
+    if (Platform.OS !== 'android') {
+      setBluetoothEnabled('enabled');
+      return true;
+    }
+
+    try {
+      const bleMesh = NativeModules.BleMesh;
+      if (!bleMesh) {
+        setBluetoothEnabled('unknown');
+        return false;
+      }
+
+      // Check if Bluetooth is enabled via native module
+      const enabled = await bleMesh.isBluetoothEnabled();
+      setBluetoothEnabled(enabled ? 'enabled' : 'disabled');
+      return enabled;
+    } catch (e) {
+      console.warn('Could not check Bluetooth state:', e);
+      setBluetoothEnabled('unknown');
+      return false;
+    }
+  }
+
+  async function openBluetoothSettings(): Promise<void> {
+    try {
+      if (Platform.OS === 'android') {
+        // Try to enable Bluetooth via native module (shows system dialog)
+        const bleMesh = NativeModules.BleMesh;
+        if (bleMesh && bleMesh.enableBluetooth) {
+          await bleMesh.enableBluetooth();
+          setScanStatus('Check the system dialog to enable Bluetooth...');
+          return;
+        }
+      }
+      
+      // Fallback: open settings
+      await Linking.openSettings();
+      setScanStatus('Opened app settings. Enable Bluetooth and return to app.');
+    } catch (e) {
+      setScanStatus('Error: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   useEffect(() => {
     void (async () => {
       try {
+        // First check if Bluetooth is enabled
+        const btEnabled = await checkBluetoothEnabled();
+        if (!btEnabled) {
+          setScanStatus('Bluetooth is disabled. Enable Bluetooth to use mesh features.');
+          return;
+        }
+
         const hasPermissions = await checkBlePermissions();
         const ok = hasPermissions ? true : await ensureBlePermissions();
         if (!ok) {
@@ -115,6 +170,7 @@ export default function MeshScreen() {
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         void checkBlePermissions();
+        void checkBluetoothEnabled();
       }
     });
 
@@ -216,6 +272,18 @@ export default function MeshScreen() {
       <Text
         style={[
           styles.permissionStatus,
+          bluetoothEnabled === 'enabled'
+            ? styles.permissionGranted
+            : bluetoothEnabled === 'disabled'
+              ? styles.permissionDenied
+              : styles.permissionUnknown,
+        ]}
+      >
+        Bluetooth: {bluetoothEnabled === 'unknown' ? 'CHECKING' : bluetoothEnabled.toUpperCase()}
+      </Text>
+      <Text
+        style={[
+          styles.permissionStatus,
           blePermissionState === 'granted'
             ? styles.permissionGranted
             : blePermissionState === 'denied'
@@ -232,6 +300,12 @@ export default function MeshScreen() {
       <Pressable style={styles.probeBtn} onPress={() => void triggerDemoHop()}>
         <Text style={styles.probeText}>Send Probe Packet</Text>
       </Pressable>
+
+      {bluetoothEnabled === 'disabled' && (
+        <Pressable style={styles.bluetoothBtn} onPress={() => void openBluetoothSettings()}>
+          <Text style={styles.bluetoothText}>Enable Bluetooth</Text>
+        </Pressable>
+      )}
 
       <Pressable style={styles.permBtn} onPress={() => void requestMeshPermissions()}>
         <Text style={styles.permText}>Grant Mesh Permissions</Text>
@@ -317,6 +391,20 @@ const styles = StyleSheet.create({
   settingsText: {
     color: '#e6e7ef',
     fontWeight: '700',
+  },
+  bluetoothBtn: {
+    marginTop: 10,
+    borderWidth: 2,
+    borderColor: '#ff6b6b',
+    borderRadius: 10,
+    backgroundColor: '#4a1f1f',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  bluetoothText: {
+    color: '#ff9999',
+    fontWeight: '800',
+    fontSize: 14,
   },
   permissionStatus: {
     marginTop: 6,

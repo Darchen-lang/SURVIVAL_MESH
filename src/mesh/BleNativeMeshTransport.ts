@@ -9,9 +9,13 @@ type BleMeshNativeModule = {
   start(nodeId: string): Promise<boolean>;
   stop(): Promise<boolean>;
   sendPacket(packetJson: string): Promise<boolean>;
+  isBluetoothEnabled(): Promise<boolean>;
+  enableBluetooth(): Promise<boolean>;
 };
 
-const moduleRef = NativeModules.BleMesh as BleMeshNativeModule | undefined;
+function getModule(): BleMeshNativeModule | undefined {
+  return NativeModules.BleMesh as BleMeshNativeModule | undefined;
+}
 
 export class BleNativeMeshTransport {
   private eventEmitter: NativeEventEmitter | null = null;
@@ -19,19 +23,30 @@ export class BleNativeMeshTransport {
   private subscriptions: Array<{ remove: () => void }> = [];
 
   isAvailable(): boolean {
-    return Platform.OS === 'android' && !!moduleRef;
-  }
+  return Platform.OS === 'android' && !!getModule();
+}
 
   isStarted(): boolean {
     return this.started;
   }
 
+  async isBluetoothEnabled(): Promise<boolean> {
+    if (!this.isAvailable() || !getModule()) {
+      return true; // Assume enabled on non-Android or if module unavailable
+    }
+    try {
+      return await getModule()!.isBluetoothEnabled();
+    } catch {
+      return false;
+    }
+  }
+
   async start(nodeId: string, onPacket: PacketHandler, onPeerConnected: PeerHandler, onPeerDisconnected: PeerHandler): Promise<void> {
-    if (!this.isAvailable() || !moduleRef || this.started) {
+    if (!this.isAvailable() || !getModule() || this.started) {
       return;
     }
 
-    this.eventEmitter = new NativeEventEmitter(moduleRef as never);
+    this.eventEmitter = new NativeEventEmitter(getModule() as never);
 
     this.subscriptions.push(
       this.eventEmitter.addListener('BleMeshPacket', (event: { fromPeerId?: string; payload?: string }) => {
@@ -62,7 +77,7 @@ export class BleNativeMeshTransport {
       })
     );
 
-    await moduleRef.start(nodeId);
+    await getModule()!.start(nodeId);
     this.started = true;
   }
 
@@ -102,7 +117,7 @@ export class BleNativeMeshTransport {
   }
 
   async stop(): Promise<void> {
-    if (!moduleRef || !this.started) {
+    if (!getModule() || !this.started) {
       this.started = false;
       return;
     }
@@ -110,16 +125,16 @@ export class BleNativeMeshTransport {
     this.subscriptions.forEach((sub) => sub.remove());
     this.subscriptions = [];
 
-    await moduleRef.stop();
+    await getModule()!.stop();
     this.started = false;
     this.eventEmitter = null;
   }
 
   async send(packet: MeshPacket): Promise<boolean> {
-    if (!moduleRef || !this.started) {
+    if (!getModule() || !this.started) {
       return false;
     }
 
-    return moduleRef.sendPacket(JSON.stringify(packet));
+    return getModule()!.sendPacket(JSON.stringify(packet));
   }
 }

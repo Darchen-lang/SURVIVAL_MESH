@@ -1,5 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
-import nacl from 'tweetnacl';
+import * as nacl from 'tweetnacl';
 import { Buffer } from 'buffer';
 import { IdentityManager, type CryptoAdapter, type SecureStoreAdapter } from './IdentityManager';
 

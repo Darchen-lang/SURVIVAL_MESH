@@ -78,10 +78,8 @@ export default function NavigationScreen() {
     setLng(parsedLng);
   }
 
-  const now = new Date();
-  const sun = useMemo(() => solarNavigator.getSunPosition(now, lat, lng), [now, lat, lng]);
-  const trueNorth = useMemo(() => solarNavigator.getTrueNorth(heading, now, lat, lng), [heading, now, lat, lng]);
-
+  const sun = useMemo(() => solarNavigator.getSunPosition(new Date(), lat, lng), [lat, lng, heading]);
+  const trueNorth = useMemo(() => solarNavigator.getTrueNorth(heading, new Date(), lat, lng), [heading, lat, lng]);
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>SOLAR NAVIGATION</Text>

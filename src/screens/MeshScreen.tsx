@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import type { Permission } from 'react-native';
+import {
+  AppState,
+  Linking,
+  PermissionsAndroid,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import MeshVisualizer, { MeshVisualizerRef } from '../components/MeshVisualizer';
 import { disableBeaconMode, enableBeaconMode, isBeaconModeEnabled } from '../mesh/BeaconMode';
 import { meshRouter } from '../mesh/MeshRouter';
@@ -14,11 +25,98 @@ export default function MeshScreen() {
   const [beaconEnabled, setBeaconEnabled] = useState(false);
   const [beaconLoading, setBeaconLoading] = useState(true);
   const [beaconError, setBeaconError] = useState<string | null>(null);
+  const [scanStatus, setScanStatus] = useState<string>('Not scanning');
+  const [blePermissionState, setBlePermissionState] = useState<'unknown' | 'granted' | 'denied'>('unknown');
+
+  function getRequiredBlePermissions(): Permission[] {
+    if (Platform.OS !== 'android') {
+      return [];
+    }
+
+    const sdk = Number(Platform.Version);
+    return sdk >= 31
+      ? [
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        ]
+      : [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+  }
+
+  async function checkBlePermissions(): Promise<boolean> {
+    if (Platform.OS !== 'android') {
+      setBlePermissionState('granted');
+      return true;
+    }
+
+    const perms = getRequiredBlePermissions();
+    const checks = await Promise.all(perms.map((perm) => PermissionsAndroid.check(perm)));
+    const ok = checks.every(Boolean);
+    setBlePermissionState(ok ? 'granted' : 'denied');
+    return ok;
+  }
+
+  async function ensureBlePermissions(): Promise<boolean> {
+    if (Platform.OS !== 'android') {
+      setBlePermissionState('granted');
+      return true;
+    }
+
+    const perms = getRequiredBlePermissions();
+
+    const results = await PermissionsAndroid.requestMultiple(perms);
+    const ok = perms.every((p) => results[p] === PermissionsAndroid.RESULTS.GRANTED);
+    setBlePermissionState(ok ? 'granted' : 'denied');
+    return ok;
+  }
+
+  async function requestMeshPermissions(): Promise<void> {
+    try {
+      const ok = await ensureBlePermissions();
+      if (ok) {
+        setScanStatus('Permissions granted. You can scan for peers now.');
+      } else {
+        setScanStatus('Permissions denied. Enable Nearby devices permission in app settings.');
+      }
+    } catch (e) {
+      setScanStatus('Permission error: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function openAppSettings(): Promise<void> {
+    try {
+      await Linking.openSettings();
+      setScanStatus('Opened app settings. Enable Nearby devices and return to app.');
+    } catch (e) {
+      setScanStatus('Could not open settings: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
 
   useEffect(() => {
-    void meshRouter.advertise();
-    void meshRouter.startScanning();
+    void (async () => {
+      try {
+        const hasPermissions = await checkBlePermissions();
+        const ok = hasPermissions ? true : await ensureBlePermissions();
+        if (!ok) {
+          setScanStatus('BLE permissions denied. Allow Nearby devices permissions and retry.');
+          return;
+        }
+
+        await meshRouter.advertise();
+        await meshRouter.startScanning();
+        setScanStatus('Scanning for peers...');
+      } catch (e) {
+        setScanStatus('BLE error: ' + (e instanceof Error ? e.message : String(e)));
+      }
+    })();
+
     void refreshBeaconState();
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void checkBlePermissions();
+      }
+    });
 
     const unsubConnected = meshRouter.on('peerConnected', ({ peerId }) => {
       setNodes((prev) => {
@@ -54,6 +152,7 @@ export default function MeshScreen() {
     });
 
     return () => {
+      appStateSub.remove();
       unsubConnected();
       unsubForwarded();
       meshRouter.stopScanning();
@@ -77,6 +176,16 @@ export default function MeshScreen() {
 
   async function triggerDemoHop(): Promise<void> {
     await meshRouter.send('mesh probe', 'LOCAL01', 'sos', 2);
+
+    // Simulate a visible hop on the visualizer using the self node
+    if (nodes.length > 1) {
+      const randomPeer = nodes[Math.floor(Math.random() * (nodes.length - 1)) + 1];
+      visualizerRef.current?.animateHop('self', randomPeer.id);
+    } else {
+      // No peers yet — animate a self-pulse by hopping to self
+      setNodes((prev) => prev); // trigger re-render
+      visualizerRef.current?.animateHop('self', 'self');
+    }
   }
 
   async function toggleBeacon(): Promise<void> {
@@ -103,13 +212,33 @@ export default function MeshScreen() {
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>MESH NETWORK</Text>
       <Text style={styles.sub}>{Math.max(0, nodes.length - 1)} nodes detected</Text>
-
+      <Text style={[styles.sub, { color: '#ffcc00', marginTop: 4 }]}>{scanStatus}</Text>
+      <Text
+        style={[
+          styles.permissionStatus,
+          blePermissionState === 'granted'
+            ? styles.permissionGranted
+            : blePermissionState === 'denied'
+              ? styles.permissionDenied
+              : styles.permissionUnknown,
+        ]}
+      >
+        BLE Permission: {blePermissionState.toUpperCase()}
+      </Text>
       <View style={styles.visualWrap}>
         <MeshVisualizer ref={visualizerRef} nodes={nodes} edges={edges} />
       </View>
 
       <Pressable style={styles.probeBtn} onPress={() => void triggerDemoHop()}>
         <Text style={styles.probeText}>Send Probe Packet</Text>
+      </Pressable>
+
+      <Pressable style={styles.permBtn} onPress={() => void requestMeshPermissions()}>
+        <Text style={styles.permText}>Grant Mesh Permissions</Text>
+      </Pressable>
+
+      <Pressable style={styles.settingsBtn} onPress={() => void openAppSettings()}>
+        <Text style={styles.settingsText}>Open App Settings</Text>
       </Pressable>
 
       <View style={styles.beaconCard}>
@@ -162,6 +291,46 @@ const styles = StyleSheet.create({
   probeText: {
     color: '#d6e7fb',
     fontWeight: '700',
+  },
+  permBtn: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#486a8f',
+    borderRadius: 10,
+    backgroundColor: '#17304c',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  permText: {
+    color: '#deefff',
+    fontWeight: '700',
+  },
+  settingsBtn: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#5e5e73',
+    borderRadius: 10,
+    backgroundColor: '#1c1f2c',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  settingsText: {
+    color: '#e6e7ef',
+    fontWeight: '700',
+  },
+  permissionStatus: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  permissionGranted: {
+    color: '#8effb0',
+  },
+  permissionDenied: {
+    color: '#ff9e9e',
+  },
+  permissionUnknown: {
+    color: '#c6d2df',
   },
   beaconCard: {
     marginTop: 16,

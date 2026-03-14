@@ -6,8 +6,10 @@ export class Database {
 	private static instance: Database | null = null;
 	private db: SQLite.SQLiteDatabase | null = null;
 	private initialized = false;
+	private openPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+	private initPromise: Promise<void> | null = null;
 
-	private constructor() {}
+	private constructor() { }
 
 	static getInstance(): Database {
 		if (!Database.instance) {
@@ -21,12 +23,41 @@ export class Database {
 			return this.db;
 		}
 
-		this.db = await SQLite.openDatabaseAsync(DB_NAME);
-		await this.init();
-		return this.db;
+		if (this.openPromise) {
+			return this.openPromise;
+		}
+
+		this.openPromise = (async () => {
+			this.db = await SQLite.openDatabaseAsync(DB_NAME);
+			await this.init();
+			return this.db;
+		})();
+
+		try {
+			return await this.openPromise;
+		} finally {
+			this.openPromise = null;
+		}
 	}
 
 	async init(): Promise<void> {
+		if (this.initialized) {
+			return;
+		}
+
+		if (this.initPromise) {
+			return this.initPromise;
+		}
+
+		this.initPromise = this.initInternal();
+		try {
+			await this.initPromise;
+		} finally {
+			this.initPromise = null;
+		}
+	}
+
+	private async initInternal(): Promise<void> {
 		if (this.initialized) {
 			return;
 		}
@@ -68,6 +99,25 @@ export class Database {
 				createdAt INTEGER NOT NULL
 			);`,
 			"CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(createdAt DESC);",
+			`CREATE TABLE IF NOT EXISTS map_pins (
+				id TEXT PRIMARY KEY NOT NULL,
+				label TEXT NOT NULL,
+				lat REAL NOT NULL,
+				lng REAL NOT NULL,
+				notes TEXT,
+				createdAt INTEGER NOT NULL
+			);`,
+			"CREATE INDEX IF NOT EXISTS idx_map_pins_created_at ON map_pins(createdAt DESC);",
+			`CREATE TABLE IF NOT EXISTS offline_map_meta (
+			id TEXT PRIMARY KEY NOT NULL,
+			centerLat REAL NOT NULL,
+			centerLng REAL NOT NULL,
+			minZoom INTEGER NOT NULL,
+			maxZoom INTEGER NOT NULL,
+			delta REAL NOT NULL,
+			downloadedAt INTEGER NOT NULL,
+			tileCount INTEGER NOT NULL DEFAULT 0
+		);`,
 		];
 
 		for (const stmt of statements) {

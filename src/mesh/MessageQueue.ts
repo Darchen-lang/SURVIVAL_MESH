@@ -55,8 +55,9 @@ export class MessageQueue {
 			`
 			SELECT id, ttl, senderId, payload, timestamp, delivered, type
 			FROM messages
-			WHERE delivered = 0
+			WHERE ttl > 0
 			ORDER BY timestamp DESC
+			LIMIT 500
 			`
 		);
 
@@ -77,13 +78,12 @@ export class MessageQueue {
 		await conn.runAsync(`UPDATE messages SET delivered = 1 WHERE id = ?`, [id]);
 	}
 
-	async getUndelivered(limit = 200): Promise<MeshPacket[]> {
+	async getAllMessages(limit = 300): Promise<MeshPacket[]> {
 		const conn = await db.getConnection();
 		const rows = await conn.getAllAsync<Row>(
 			`
 			SELECT id, ttl, senderId, payload, timestamp, delivered, type
 			FROM messages
-			WHERE delivered = 0
 			ORDER BY timestamp DESC
 			LIMIT ?
 			`,

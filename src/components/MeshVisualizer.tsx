@@ -1,9 +1,8 @@
-import React, { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import Svg, { Circle, G, Line, Text as SvgText } from 'react-native-svg';
 import Animated, {
 	Easing,
-	runOnJS,
 	useAnimatedProps,
 	useSharedValue,
 	withTiming,
@@ -23,11 +22,6 @@ type Props = {
 	height?: number;
 };
 
-type HopAnimation = {
-	from: MeshNode;
-	to: MeshNode;
-};
-
 function rssiToOpacity(rssi: number): number {
 	const clamped = Math.max(-95, Math.min(-35, rssi));
 	return (clamped + 95) / 60;
@@ -36,17 +30,22 @@ function rssiToOpacity(rssi: number): number {
 const MeshVisualizer = forwardRef<MeshVisualizerRef, Props>(
 	({ nodes, edges, width = 340, height = 260 }, ref) => {
 		const progress = useSharedValue(0);
-		const trail = useSharedValue(0);
-		const [hop, setHop] = useState<HopAnimation | null>(null);
+		const opacity = useSharedValue(0);
+
+		// Shared values for from/to coordinates — readable inside worklets
+		const fromX = useSharedValue(0);
+		const fromY = useSharedValue(0);
+		const toX = useSharedValue(0);
+		const toY = useSharedValue(0);
+
 		const nodeMap = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+
 		const edgeStrength = useMemo(() => {
 			const map = new Map<string, number>();
 			edges.forEach((e) => {
 				const a = nodeMap.get(e.from);
 				const b = nodeMap.get(e.to);
-				if (!a || !b) {
-					return;
-				}
+				if (!a || !b) return;
 				map.set(`${e.from}:${e.to}`, (a.rssi + b.rssi) / 2);
 			});
 			return map;
@@ -56,31 +55,35 @@ const MeshVisualizer = forwardRef<MeshVisualizerRef, Props>(
 			animateHop(fromId: string, toId: string) {
 				const from = nodeMap.get(fromId);
 				const to = nodeMap.get(toId);
-				if (!from || !to) {
-					return;
-				}
-				setHop({ from, to });
+				if (!from || !to) return;
+
+				// Write coordinates into shared values — safe for worklets
+				fromX.value = from.x;
+				fromY.value = from.y;
+				toX.value = to.x;
+				toY.value = to.y;
+
 				progress.value = 0;
-				trail.value = 1;
-				progress.value = withTiming(1, { duration: 800, easing: Easing.inOut(Easing.cubic) }, (finished) => {
-					if (finished) {
-						trail.value = withTiming(0, { duration: 320 });
-						runOnJS(setHop)(null);
-					}
+				opacity.value = 1;
+
+				progress.value = withTiming(1, {
+					duration: 800,
+					easing: Easing.inOut(Easing.cubic),
+				});
+
+				opacity.value = withTiming(1, { duration: 100 }, () => {
+					opacity.value = withTiming(0, { duration: 300, easing: Easing.out(Easing.cubic) });
 				});
 			},
 		}));
 
 		const animatedHopProps = useAnimatedProps(() => {
-			if (!hop) {
-				return { cx: -100, cy: -100, opacity: 0 };
-			}
-			const x = hop.from.x + (hop.to.x - hop.from.x) * progress.value;
-			const y = hop.from.y + (hop.to.y - hop.from.y) * progress.value;
+			const x = fromX.value + (toX.value - fromX.value) * progress.value;
+			const y = fromY.value + (toY.value - fromY.value) * progress.value;
 			return {
 				cx: x,
 				cy: y,
-				opacity: trail.value,
+				opacity: opacity.value,
 			};
 		});
 
@@ -91,9 +94,7 @@ const MeshVisualizer = forwardRef<MeshVisualizerRef, Props>(
 						{edges.map((edge) => {
 							const from = nodeMap.get(edge.from);
 							const to = nodeMap.get(edge.to);
-							if (!from || !to) {
-								return null;
-							}
+							if (!from || !to) return null;
 							const signal = edgeStrength.get(`${edge.from}:${edge.to}`) ?? -90;
 							return (
 								<Line
@@ -141,4 +142,3 @@ const styles = StyleSheet.create({
 });
 
 export default MeshVisualizer;
-

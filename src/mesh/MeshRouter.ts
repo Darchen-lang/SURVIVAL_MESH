@@ -1,10 +1,16 @@
 import { BleManager, Device } from 'react-native-ble-plx';
+import { Buffer } from 'buffer';
 import { messageQueue } from './MessageQueue';
+import { BleNativeMeshTransport } from './BleNativeMeshTransport';
+import { UdpMeshTransport } from './UdpMeshTransport';
 import type { MeshPacket, MeshPacketType } from '../types/mesh';
 
 const MESH_NAME = 'SURVIVAL-MESH-01';
 const MESH_SERVICE_UUID = 'f0e1d2c3-b4a5-4697-8899-aabbccddeeff';
 const MESH_CHARACTERISTIC_UUID = '0f1e2d3c-4b5a-6789-8899-aabbccddeeff';
+const ENABLE_NATIVE_BLE_TRANSPORT = true;
+const ENABLE_NATIVE_BLE_DATA_SEND = true;
+const ENABLE_BLE_CHARACTERISTIC_WRITES = true;
 
 type MeshEventMap = {
 	packetReceived: MeshPacket;
@@ -47,9 +53,12 @@ class TinyEmitter {
 
 export class MeshRouter {
 	private manager = new BleManager();
+	private nativeBle = new BleNativeMeshTransport();
+	private udp = new UdpMeshTransport();
 	private seenMessages = new Set<string>();
 	private connectedPeers = new Map<string, Device>();
 	private emitter = new TinyEmitter();
+	private localRelayNodeId = `relay-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 	on = this.emitter.on.bind(this.emitter);
 
@@ -60,6 +69,20 @@ export class MeshRouter {
 	}
 
 	async startScanning(): Promise<void> {
+		// Start all available transports in parallel so a partial native BLE setup
+		// does not block UDP or BLE-PLX receive paths.
+		try {
+			await this.ensureNativeBleTransport();
+		} catch {
+			// Continue with other transports if native BLE startup fails.
+		}
+
+		try {
+			await this.ensureUdpTransport();
+		} catch {
+			// Continue with BLE paths if UDP startup fails.
+		}
+
 		this.manager.startDeviceScan(null, null, async (error, device) => {
 			if (error || !device) {
 				return;
@@ -117,6 +140,18 @@ export class MeshRouter {
 	}
 
 	async send(payload: string, senderId: string, type: MeshPacketType = 'message', ttl = 7): Promise<MeshPacket> {
+		try {
+			await this.ensureNativeBleTransport();
+		} catch {
+			// Keep message creation/send alive for remaining transports.
+		}
+
+		try {
+			await this.ensureUdpTransport();
+		} catch {
+			// Keep message creation/send alive for remaining transports.
+		}
+
 		const packet: MeshPacket = {
 			id: this.createId(),
 			ttl,
@@ -177,13 +212,67 @@ export class MeshRouter {
 			})
 		);
 		this.connectedPeers.clear();
+		await this.nativeBle.stop();
+		await this.udp.stop();
+	}
+
+	private async ensureNativeBleTransport(): Promise<boolean> {
+		if (!ENABLE_NATIVE_BLE_TRANSPORT) {
+			return false;
+		}
+
+		if (!this.nativeBle.isAvailable()) {
+			return false;
+		}
+
+		if (this.nativeBle.isStarted()) {
+			return true;
+		}
+
+		await this.nativeBle.start(
+			this.localRelayNodeId,
+			async (fromPeerId, packet) => {
+				await this.receive(`ble-native:${fromPeerId}`, packet);
+			},
+			(peerId) => {
+				this.emitter.emit('peerConnected', { peerId });
+			},
+			(peerId) => {
+				this.emitter.emit('peerDisconnected', { peerId });
+			}
+		);
+
+		return true;
+	}
+
+	private async ensureUdpTransport(): Promise<void> {
+		if (this.udp.isStarted()) {
+			return;
+		}
+
+		await this.udp.start(this.localRelayNodeId, async (fromNodeId, packet) => {
+			await this.receive(`udp:${fromNodeId}`, packet);
+		});
 	}
 
 	private async broadcast(packet: MeshPacket, excludePeerId?: string): Promise<void> {
 		const encoded = this.encodePacket(packet);
-		const peers = Array.from(this.connectedPeers.values()).filter((peer) => peer.id !== excludePeerId);
+		const peers = ENABLE_BLE_CHARACTERISTIC_WRITES
+			? Array.from(this.connectedPeers.values()).filter((peer) => peer.id !== excludePeerId)
+			: [];
 
 		const deliveredTo: string[] = [];
+
+		if (ENABLE_NATIVE_BLE_DATA_SEND) {
+			try {
+				const nativeDelivered = await this.nativeBle.send(packet);
+				if (nativeDelivered) {
+					deliveredTo.push('ble-native');
+				}
+			} catch {
+				// Keep trying other transports.
+			}
+		}
 
 		await Promise.all(
 			peers.map(async (peer) => {
@@ -194,14 +283,23 @@ export class MeshRouter {
 						encoded
 					);
 					deliveredTo.push(peer.id);
-					await messageQueue.markDelivered(packet.id);
 				} catch {
 					// ignore write failures; DTN queue handles later retries
 				}
 			})
 		);
 
+		try {
+			const udpDelivered = await this.udp.send(packet);
+			if (udpDelivered) {
+				deliveredTo.push('lan-broadcast');
+			}
+		} catch {
+			// Keep peer-specific BLE writes as successful delivery paths.
+		}
+
 		if (deliveredTo.length > 0) {
+			await messageQueue.markDelivered(packet.id);
 			this.emitter.emit('packetForwarded', {
 				packetId: packet.id,
 				fromPeerId: excludePeerId ?? 'self',
@@ -215,31 +313,42 @@ export class MeshRouter {
 	}
 
 	private encodePacket(packet: MeshPacket): string {
-		if (typeof globalThis.btoa === 'function') {
-			return globalThis.btoa(JSON.stringify(packet));
-		}
-		return JSON.stringify(packet);
+		return Buffer.from(JSON.stringify(packet), 'utf8').toString('base64');
 	}
 
 	private decodePacket(value: string): MeshPacket | null {
-		try {
-			const decoded = typeof globalThis.atob === 'function' ? globalThis.atob(value) : value;
-			const packet = JSON.parse(decoded) as MeshPacket;
-			if (
-				typeof packet.id !== 'string' ||
-				typeof packet.ttl !== 'number' ||
-				typeof packet.senderId !== 'string' ||
-				typeof packet.payload !== 'string'
-			) {
+		const tryParse = (text: string): MeshPacket | null => {
+			try {
+				const packet = JSON.parse(text) as MeshPacket;
+				if (
+					typeof packet.id !== 'string' ||
+					typeof packet.ttl !== 'number' ||
+					typeof packet.senderId !== 'string' ||
+					typeof packet.payload !== 'string'
+				) {
+					return null;
+				}
+				return {
+					...packet,
+					type: packet.type ?? 'message',
+					timestamp: packet.timestamp ?? Date.now(),
+				};
+			} catch {
 				return null;
 			}
-			return {
-				...packet,
-				type: packet.type ?? 'message',
-				timestamp: packet.timestamp ?? Date.now(),
-			};
+		};
+
+		try {
+			const decoded = Buffer.from(value, 'base64').toString('utf8');
+			const parsed = tryParse(decoded);
+			if (parsed) {
+				return parsed;
+			}
+
+			// Fallback for raw JSON payloads from non-BLE sources.
+			return tryParse(value);
 		} catch {
-			return null;
+			return tryParse(value);
 		}
 	}
 }

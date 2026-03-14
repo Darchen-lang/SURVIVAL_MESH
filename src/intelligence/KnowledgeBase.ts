@@ -125,8 +125,26 @@ const BUILTIN_ARTICLES: ArticleRow[] = [
 export class KnowledgeBase {
   private db: SQLite.SQLiteDatabase | null = null;
   private hasFts = false;
+  private initPromise: Promise<void> | null = null;
 
   async init(): Promise<void> {
+    if (this.db) {
+      return;
+    }
+
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.initInternal();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async initInternal(): Promise<void> {
     if (this.db) {
       return;
     }
@@ -140,18 +158,10 @@ export class KnowledgeBase {
         title TEXT NOT NULL,
         content TEXT NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS articles_fts (
-        id TEXT PRIMARY KEY NOT NULL,
-        category TEXT NOT NULL,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL
-      );
     `);
 
-    const columns = await this.db.getAllAsync<{ name: string }>(`PRAGMA table_info(articles_fts)`);
-    this.hasFts = columns.some((c) => c.name === 'content');
-
+    this.hasFts = false;
+    
     const countRow = await this.db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) as count FROM articles`);
     const count = countRow?.count ?? 0;
 
@@ -161,40 +171,18 @@ export class KnowledgeBase {
           `INSERT OR REPLACE INTO articles (id, category, title, content) VALUES (?, ?, ?, ?)`,
           [article.id, article.category, article.title, article.content]
         );
-        await this.db.runAsync(
-          `INSERT OR REPLACE INTO articles_fts (id, category, title, content) VALUES (?, ?, ?, ?)`,
-          [article.id, article.category, article.title, article.content]
-        );
       }
     }
   }
 
   async search(query: string): Promise<ArticlePreview[]> {
     await this.init();
-    if (!this.db) {
-      return [];
-    }
+    if (!this.db) return [];
 
     const q = query.trim();
-    if (!q) {
-      return [];
-    }
+    if (!q) return [];
 
-    if (this.hasFts) {
-      const rows = await this.db.getAllAsync<ArticlePreview>(
-        `
-        SELECT id, category, title, substr(content, 1, 180) AS preview
-        FROM articles_fts
-        WHERE title LIKE ? OR content LIKE ? OR category LIKE ?
-        ORDER BY title ASC
-        LIMIT 20
-        `,
-        [`%${q}%`, `%${q}%`, `%${q}%`]
-      );
-      return rows;
-    }
-
-    const rows = await this.db.getAllAsync<ArticlePreview>(
+    return this.db.getAllAsync<ArticlePreview>(
       `
       SELECT id, category, title, substr(content, 1, 180) AS preview
       FROM articles
@@ -204,8 +192,6 @@ export class KnowledgeBase {
       `,
       [`%${q}%`, `%${q}%`, `%${q}%`]
     );
-
-    return rows;
   }
 
   async getArticle(id: string): Promise<ArticleRow | null> {

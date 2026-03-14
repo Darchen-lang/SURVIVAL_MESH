@@ -19,6 +19,7 @@ import NavigationScreen from './src/screens/NavigationScreen';
 import TriageScreen from './src/screens/TriageScreen';
 import SurvivalScreen from './src/screens/SurvivalScreen';
 import SystemsScreen from './src/screens/SystemsScreen';
+import MapScreen from './src/screens/MapScreen';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -37,6 +38,7 @@ const TAB_ICONS: Record<string, string> = {
   Chat: '◉',
   Bulletin: '◈',
   Identity: '◎',
+  Map: '⌖',
   Navigate: '◬',
   Triage: '✚',
   Survival: '◆',
@@ -175,6 +177,8 @@ export default function App() {
           options={{ title: 'BULLETIN' }} />
         <Tab.Screen name="Identity" component={IdentityScreen}
           options={{ title: 'IDENTITY' }} />
+        <Tab.Screen name="Map" component={MapScreen}
+          options={{ title: 'MAP' }} />
         <Tab.Screen name="Navigate" component={NavigationScreen}
           options={{ title: 'NAVIGATE' }} />
         <Tab.Screen name="Triage" component={TriageScreen}

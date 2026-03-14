@@ -50,8 +50,7 @@ export class BleNativeMeshTransport {
 
     this.subscriptions.push(
       this.eventEmitter.addListener('BleMeshPacket', (event: { fromPeerId?: string; payload?: string }) => {
-        const fromPeerId = event.fromPeerId;
-        const payload = event.payload;
+        const { fromPeerId, payload } = event;
         if (!fromPeerId || !payload) {
           return;
         }

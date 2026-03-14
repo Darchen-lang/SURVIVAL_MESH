@@ -45,7 +45,7 @@ export class BulletinBoard {
 
   async getPosts(): Promise<BulletinPost[]> {
     const conn = await db.getConnection();
-    const rows = await conn.getAllAsync<PostRow>(
+    return conn.getAllAsync<PostRow>(
       `
       SELECT id, authorKeyHash, content, tag, timestamp, expiresAt
       FROM posts
@@ -54,13 +54,11 @@ export class BulletinBoard {
       `,
       [Date.now()]
     );
-    return rows;
   }
 
   async getPostIds(): Promise<string[]> {
     const conn = await db.getConnection();
-    const rows = await conn.getAllAsync<{ id: string }>(`SELECT id FROM posts`);
-    return rows.map((r) => r.id);
+    return (await conn.getAllAsync<{ id: string }>(`SELECT id FROM posts`)).map((r) => r.id);
   }
 
   async syncPosts(peerPostIds: string[]): Promise<BulletinPost[]> {
